@@ -29,8 +29,8 @@ def datetimeConversion(series):
     return series.map(dates)
 
 
-def clean_meter_data():
-    """Process data to format times etc."""
+def clean_data():
+    """Process sql exported csv data."""
     path = mysql_dir + "meter.csv" #CSV file containing violation code counts
     names = ['Issue_Date', 'Violation_Code', 'Violation_Time', 'Violation_County', 
              'Violation_In_Front_Of_Or_Opposite', 'House_Number', 'Street_Name', 
@@ -44,6 +44,14 @@ def clean_meter_data():
     data["Datetime"] = datetimeConversion(data["Datetime"])
     data = data.dropna().reset_index(drop=True)
     data["Weekday"] = data["Datetime"].apply(lambda x: x.weekday())
+    
+    #time conversions for convenience
+    data["Start_Time"] = datetimeConversion(data["From_Hours_In_Effect"])
+    data = data[~data["Start_Time"].isnull()]
+    data = data.reset_index(drop=True)
+    data["Start_Time"] = data["Start_Time"].apply(lambda x: x.time().hour+x.time().minute/60.0)
+    data["Time"] = data["Datetime"].apply(lambda x: x.time().hour+x.time().minute/60.0)
+    data["delay"] = data["Time"]-data["Start_Time"]
  
     
     def exportData(data):
@@ -61,7 +69,7 @@ def importData():
     return data
 
 
-def ZCA_normalize(array):
+def z_normalize(array):
     stddev = np.std(array)
     avg = np.mean(array)
     array = (array-avg)/stddev
@@ -73,7 +81,7 @@ def meter_weekday_plot(data,save=False):
     plt.figure(figsize=(10,7.5))
     plt.title("Meter Violations By Weekday", fontsize=20)
     plt.xlabel("Weekday", fontsize=16)
-    plt.ylabel("ZCA Count", fontsize=16)
+    plt.ylabel("Z-score Count", fontsize=16)
     
     ax = plt.subplot(111)  
     ax.spines["top"].set_visible(False)  
@@ -86,10 +94,10 @@ def meter_weekday_plot(data,save=False):
     x = counts.index
     idx = np.arange(len(x))
     y = counts.values
-    y = ZCA_normalize(y)
+    y = z_normalize(y)
     x_labels = ["Mon","Tues","Wed","Thurs","Fri","Sat","Sun"]
     plt.xticks(idx, x_labels, fontsize=14)  
-    plt.bar(idx, y, width=0.55, color="navy", alpha=0.80)
+    plt.bar(idx, y, width=0.55, color="darkred", alpha=0.80)
     plt.xlim([min(idx)-0.5,max(idx)+0.5])
     plt.ylim([-2.5,2.5])
     plt.hlines(y=0,
@@ -109,7 +117,7 @@ def meter_yearday_plot(data,save=False):
     plt.figure(figsize=(10,7.5))
     plt.title("Meter Violations By Day of Year", fontsize=20)
     plt.xlabel("Day of Year", fontsize=16)
-    plt.ylabel("ZCA Count", fontsize=16)
+    plt.ylabel("Z-score Count", fontsize=16)
     
     ax = plt.subplot(111)  
     ax.spines["top"].set_visible(False)  
@@ -127,11 +135,11 @@ def meter_yearday_plot(data,save=False):
     x = counts.index
     idx = np.arange(len(x))
     y = counts.values
-    y = ZCA_normalize(y)
+    y = z_normalize(y)
     y_rm = counts.rolling(7).mean() #rolling mean
-    plt.plot(idx, ZCA_normalize(y_rm),'ro-') #ZCA rolling mean
+    plt.plot(idx, z_normalize(y_rm),'ro-') #ZCA rolling mean
     plt.bar(idx, y, width=1.0, color="red", alpha=0.30)
-    plt.legend(("Rolling Mean","ZCA Count"))
+    plt.legend(("Rolling Mean","Z-score Count"))
     plt.xlim([min(idx)-0.5,max(idx)+0.5])
     plt.tight_layout()
     if save:
@@ -154,9 +162,9 @@ def meter_time_plot(data,save=False):
     ax.get_xaxis().tick_bottom()  
     ax.get_yaxis().tick_left()
     
-    y, x, _ = plt.hist(data["Time"].values, 
-                       bins=100, alpha=0.35,
-                       edgecolor='blue',
+    y, x, _ = plt.hist(data["Time"].values,
+                       bins='auto', alpha=0.35,
+                       edgecolor='none',
                        label='hist', normed=True)
 
     x=(x[1:]+x[:-1])/2
@@ -171,22 +179,23 @@ def meter_time_plot(data,save=False):
         g4 = gauss(x,mu4,sigma4,A4)
         return g1+g2+g3+g4
     
-    expected=[0.01]*12
+    expected=[0.01]*4*3
     params,cov = curve_fit(four_modes,x,y,expected)
     sigma=np.sqrt(np.diag(cov))
     plt.plot(x,four_modes(x,*params),color="red",linewidth=3.0,label='model')
     plt.legend(("Mixed Gaussians","Histogram"), fontsize=12)
     plt.xlim([5.0,24.0])
+    plt.xticks(np.arange(5.0, 24.0, 1.0), rotation=45)
+    plt.grid(linestyle='--', visible=True)
     if save:
         plt.savefig("meter_violation_times.png", format="png",dpi=300)
     gmm = pd.DataFrame(data={'params':params,'sigma':sigma},
-                       index=['mu1','sigma1','A1','mu2','sigma2','A2','mu3','sigma3','A3','mu4','sigma4','A4'])
+                       index=sum([['mu%s'%i,'sigma%s'%i,'A%s'%i] for i in range(1,4+1)],[]))
     return gmm
 
 
 if __name__=="__main__":
-    #checkpoint 1
-    #clean_meter_data()
+    #clean_data()
     data = importData()
     
     meter_weekday_plot(data,save=True)
@@ -195,13 +204,6 @@ if __name__=="__main__":
     meter_yearday_plot(data,save=True) 
     """Transitions correspond to ~Jan. 24th, Jun. 24th, and Nov. 24th."""
 
-    #Make time conversions for convenience
-    data["Start_Time"] = datetimeConversion(data["From_Hours_In_Effect"])
-    data = data[~data["Start_Time"].isnull()]
-    data = data.reset_index(drop=True)
-    data["Start_Time"] = data["Start_Time"].apply(lambda x: x.time().hour+x.time().minute/60.0)
-    data["Time"] = data["Datetime"].apply(lambda x: x.time().hour+x.time().minute/60.0)
-    data["delay"] = data["Time"]-data["Start_Time"]
-
     gmm = meter_time_plot(data,save=True)
-    """4 Peaks: 10:00 AM, 1:44 PM, 5:00 PM, 9:00 PM"""
+    print(gmm[gmm.index.str.contains('mu')]['params'])
+    """4 Broad Peaks: 10:10AM, 1:45PM, 5:00PM, 9:00PM"""
